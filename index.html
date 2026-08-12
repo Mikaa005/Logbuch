@@ -1,0 +1,2359 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Gym Logbuch</title>
+
+    <script>
+    /* Läuft bewusst hier oben und synchron: das Theme steht damit fest, bevor
+       irgendetwas gezeichnet wird – sonst blitzt beim Laden kurz das helle
+       Design auf. Deshalb direkt localStorage statt der async Storage-Helfer. */
+    (function () {
+        var theme;
+        try {
+            theme = localStorage.getItem("theme");
+        } catch (e) { /* localStorage gesperrt – dann eben Systemeinstellung */ }
+
+        if (theme !== "dark" && theme !== "light") {
+            theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = theme;
+    })();
+    </script>
+
+    <style>
+        /* ---------- Design-Tokens (hell / dunkel) ---------- */
+        :root {
+            color-scheme: light;
+            --bg: #f5f6f8;
+            --surface: #ffffff;
+            --surface-2: #f1f3f6;
+            --border: #e3e6ea;
+            --border-strong: #ccd1d9;
+            --text: #14171c;
+            --text-muted: #656d7a;
+            --text-faint: #98a0ac;
+            --accent: #4f46e5;
+            --accent-soft: #eceafd;
+            --accent-on: #ffffff;
+            --accent-2: #0d7d72;
+            --accent-2-soft: #e0f2f0;
+            --warn: #b42318;
+            --warn-soft: #fdeceb;
+            --radius: 14px;
+            --radius-sm: 9px;
+            --shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+            --shadow-lg: 0 10px 30px -12px rgba(16,24,40,.28);
+        }
+        /* Dunkles Theme – wird über data-theme am <html> geschaltet, nicht über
+           die Systemeinstellung. Die dient nur als Startwert (siehe Skript oben). */
+        :root[data-theme="dark"] {
+            color-scheme: dark;
+            --bg: #0e1116;
+            --surface: #171b22;
+            --surface-2: #1e232c;
+            --border: #272d38;
+            --border-strong: #3a4250;
+            --text: #e7eaee;
+            --text-muted: #98a1af;
+            --text-faint: #6b7481;
+            --accent: #7c8cff;
+            --accent-soft: #202744;
+            --accent-on: #0e1116;
+            --accent-2: #2dd4bf;
+            --accent-2-soft: #10312e;
+            --warn: #ff8a80;
+            --warn-soft: #3a1d1d;
+            --shadow: 0 1px 2px rgba(0,0,0,.35);
+            --shadow-lg: 0 14px 34px -14px rgba(0,0,0,.75);
+        }
+
+        * { box-sizing: border-box; }
+
+        /* weicher Übergang beim Umschalten des Themes */
+        body, .card, .day-picker, .history-item, .theme-toggle, .empty, thead th, .track {
+            transition: background-color .2s ease, border-color .2s ease, color .2s ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+        }
+
+        body {
+            margin: 0;
+            padding: 28px 16px 120px;
+            background: var(--bg);
+            color: var(--text);
+            font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            -webkit-text-size-adjust: 100%;
+            -webkit-font-smoothing: antialiased;
+        }
+        .wrap { max-width: 1080px; margin: 0 auto; }
+
+        /* ---------- Kopfbereich ---------- */
+        .app-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 24px;
+        }
+        h1 {
+            margin: 0;
+            font-size: 1.55rem;
+            font-weight: 800;
+            letter-spacing: -.025em;
+        }
+        .header-right { display: flex; align-items: center; gap: 12px; }
+        .today {
+            color: var(--text-muted);
+            font-size: .85rem;
+            font-variant-numeric: tabular-nums;
+        }
+        .theme-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: none;
+            width: 38px;
+            height: 38px;
+            padding: 0;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--surface);
+            color: var(--text-muted);
+            cursor: pointer;
+            box-shadow: var(--shadow);
+        }
+        .theme-toggle:hover { background: var(--surface-2); color: var(--text); }
+        .theme-toggle:active { transform: scale(.94); }
+        .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        /* im dunklen Theme die Sonne zeigen (= "zurück ins Helle"), sonst den Mond */
+        :root[data-theme="dark"] .icon-moon,
+        :root:not([data-theme="dark"]) .icon-sun { display: none; }
+
+        .section-label {
+            margin: 0 0 9px;
+            font-size: .7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .09em;
+            color: var(--text-faint);
+        }
+
+        /* ---------- Tagesauswahl ---------- */
+        .day-picker {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            padding: 5px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            margin-bottom: 26px;
+        }
+        .day-btn {
+            flex: 1 1 auto;
+            min-width: 78px;
+            padding: 10px 12px;
+            border: 0;
+            border-radius: var(--radius-sm);
+            background: transparent;
+            color: var(--text-muted);
+            font: inherit;
+            font-size: .875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .15s, color .15s;
+        }
+        .day-btn:hover { background: var(--surface-2); color: var(--text); }
+        .day-btn.active {
+            background: var(--accent);
+            color: var(--accent-on);
+            box-shadow: var(--shadow);
+        }
+        .day-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+        /* ---------- Karten ---------- */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+        .card-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border);
+        }
+        .card-head h2 {
+            margin: 0;
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: -.015em;
+        }
+        .card-note { display: block; font-size: .78rem; color: var(--text-faint); }
+
+        /* ---------- Zähler für Sätze / Übungen ---------- */
+        .head-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+        .stepper {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            padding: 3px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--surface-2);
+        }
+        .stepper-label {
+            padding: 0 4px 0 9px;
+            font-size: .68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            color: var(--text-faint);
+        }
+        .step-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            border: 0;
+            border-radius: 50%;
+            background: var(--surface);
+            color: var(--text);
+            font: inherit;
+            font-size: 1rem;
+            font-weight: 700;
+            line-height: 1;
+            cursor: pointer;
+            box-shadow: var(--shadow);
+            transition: background .15s, color .15s;
+        }
+        .step-btn:hover:not(:disabled) { background: var(--accent); color: var(--accent-on); }
+        .step-btn:disabled { opacity: .3; cursor: default; box-shadow: none; }
+        .step-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .stepper-value {
+            min-width: 20px;
+            text-align: center;
+            font-weight: 700;
+            font-size: .9rem;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* ---------- Tabelle ---------- */
+        .table-scroll { overflow-x: auto; }
+        table { width: 100%; border-collapse: separate; border-spacing: 0; }
+        th, td { padding: 10px 8px; text-align: center; vertical-align: top; border: 0; }
+        thead th {
+            background: var(--surface-2);
+            color: var(--text-muted);
+            font-size: .68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            white-space: nowrap;
+        }
+        thead tr:first-child th { padding-bottom: 6px; }
+        thead tr:last-child th { padding-top: 0; padding-bottom: 9px; font-size: .64rem; color: var(--text-faint); }
+        thead th.set-start, tbody td.set-start { border-left: 1px solid var(--border); }
+        thead tr th { border-bottom: 1px solid var(--border); }
+        thead tr:first-child th:not([rowspan]) { border-bottom: 0; }
+        tbody tr + tr td { border-top: 1px solid var(--border); }
+        tbody tr:focus-within td { background: var(--surface-2); }
+        tbody tr.unilateral .col-name { box-shadow: inset 3px 0 0 var(--accent); }
+        .col-name { min-width: 178px; text-align: left; }
+        .col-toggle { width: 92px; }
+        /* Satzspalten nicht beliebig schmal quetschen – bei vielen Sätzen
+           scrollt lieber die Tabelle (.table-scroll) */
+        .col-set { min-width: 80px; }
+        .col-actions { width: 84px; }
+
+        /* ---------- Zeilen-Aktionen ---------- */
+        .row-actions { display: inline-flex; gap: 2px; padding-top: 4px; }
+        .row-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border: 0;
+            border-radius: 7px;
+            background: transparent;
+            color: var(--text-faint);
+            cursor: pointer;
+            transition: background .15s, color .15s;
+        }
+        .row-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+        .row-btn.row-del:hover { background: var(--warn-soft); color: var(--warn); }
+        .row-btn:disabled { opacity: .25; cursor: default; }
+        .row-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+        /* ---------- Eingabefelder ---------- */
+        input[type=text], input[type=number], input[type=date], textarea {
+            width: 100%;
+            padding: 8px 9px;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            background: var(--surface);
+            color: var(--text);
+            font: inherit;
+            font-size: .9rem;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+            transition: border-color .15s, box-shadow .15s, background-color .2s;
+        }
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+        input::placeholder, textarea::placeholder { color: var(--text-faint); }
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
+        input.exercise-name { text-align: left; font-weight: 600; }
+
+        .name-wrap { display: flex; align-items: center; gap: 6px; }
+        .pr-badge {
+            display: none;
+            flex: none;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: var(--accent);
+            color: var(--accent-on);
+            font-size: .6rem;
+            font-weight: 800;
+            letter-spacing: .06em;
+        }
+        .pr-badge.show { display: inline-block; }
+
+        /* ---------- Einseitig-Schalter ---------- */
+        .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; padding-top: 5px; }
+        .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+        .track {
+            position: relative;
+            flex: none;
+            width: 38px;
+            height: 22px;
+            border-radius: 999px;
+            background: var(--border-strong);
+        }
+        .track::after {
+            content: "";
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 1px 2px rgba(0,0,0,.3);
+            transition: transform .18s;
+        }
+        .switch input:checked + .track { background: var(--accent); }
+        .switch input:checked + .track::after { transform: translateX(16px); }
+        .switch input:focus-visible + .track { box-shadow: 0 0 0 3px var(--accent-soft); }
+        .switch-text { display: none; font-size: .82rem; font-weight: 600; color: var(--text-muted); }
+
+        /* ---------- Links / Rechts ----------
+           Die rechte Seite erscheint nur, wenn die Übung als einseitig
+           markiert ist (Klasse "unilateral" am <tr>). */
+        .side-line { display: flex; align-items: flex-start; gap: 6px; }
+        .side-line + .side-line { margin-top: 6px; }
+        .side-right { display: none; }
+        tr.unilateral .side-right { display: flex; }
+        .side-label {
+            display: none;
+            width: 11px;
+            padding-top: 9px;
+            font-size: .65rem;
+            font-weight: 800;
+            letter-spacing: .04em;
+            color: var(--text-faint);
+            text-align: left;
+        }
+        tr.unilateral .side-label { display: inline-block; }
+        .side-field { flex: 1; min-width: 0; }
+        .hint {
+            display: block;
+            min-height: 1em;
+            margin-top: 3px;
+            font-size: .67rem;
+            color: var(--text-faint);
+            font-variant-numeric: tabular-nums;
+            /* immer einzeilig – sonst verrutschen bei schmalen Spalten die
+               L- und R-Zeilen benachbarter Sätze gegeneinander */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* ---------- Notiz ---------- */
+        .note-wrap { padding: 14px 18px; border-top: 1px solid var(--border); }
+        .note-wrap label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: .68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            color: var(--text-faint);
+        }
+        textarea.note-input { text-align: left; resize: vertical; min-height: 56px; }
+
+        /* ---------- Buttons / Aktionsleiste ---------- */
+        .actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 18px;
+        }
+        .actions-left { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+
+        /* Hinweisleiste beim Bearbeiten eines zurückliegenden Trainings */
+        .edit-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 12px;
+            padding: 12px 16px;
+            border: 1px solid var(--accent);
+            border-radius: var(--radius);
+            background: var(--accent-soft);
+        }
+        .edit-text { font-size: .88rem; color: var(--text); }
+        .edit-text strong { font-variant-numeric: tabular-nums; }
+        .save-status {
+            font-size: .78rem;
+            color: var(--text-faint);
+            font-variant-numeric: tabular-nums;
+        }
+        .btn-primary {
+            padding: 12px 24px;
+            border: 0;
+            border-radius: var(--radius-sm);
+            background: var(--accent);
+            color: var(--accent-on);
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: var(--shadow);
+            transition: filter .15s, transform .06s;
+        }
+        .btn-primary:hover { filter: brightness(1.08); }
+        .btn-primary:active { transform: translateY(1px); }
+        .btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .btn-ghost {
+            padding: 9px 16px;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            background: var(--surface);
+            color: var(--text);
+            font: inherit;
+            font-size: .875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .15s, border-color .15s;
+        }
+        .btn-ghost:hover { background: var(--surface-2); border-color: var(--accent); }
+        .btn-ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+        /* ---------- Restday ---------- */
+        .rest { padding: 40px 24px; text-align: center; }
+        .rest .emoji { font-size: 2.4rem; line-height: 1; }
+        .rest h2 { margin: 14px 0 6px; font-size: 1.1rem; }
+        .rest p { margin: 0; color: var(--text-muted); font-size: .9rem; }
+        .rest-next {
+            margin-top: 18px !important;
+            font-size: .8rem !important;
+            color: var(--text-faint) !important;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            font-weight: 700;
+        }
+        .rest-next strong { color: var(--accent); }
+        .rest .btn-primary { margin-top: 14px; }
+
+        /* ---------- Aufklappbare Karten (Fortschritt, Historie) ---------- */
+        .fold-item {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            margin-bottom: 10px;
+            overflow: hidden;
+        }
+        .fold-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 14px 16px;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
+        .fold-head:hover { background: var(--surface-2); }
+        .fold-body { display: none; padding: 4px 16px 6px; border-top: 1px solid var(--border); }
+        .fold-item.open .fold-body { display: block; }
+        .chevron { flex: none; color: var(--text-faint); transition: transform .2s; }
+        .fold-item.open .chevron { transform: rotate(180deg); }
+
+        .history-date { font-weight: 700; font-variant-numeric: tabular-nums; }
+        .badge {
+            padding: 3px 9px;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-size: .68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            white-space: nowrap;
+        }
+        .badge.limbs { background: var(--accent-2-soft); color: var(--accent-2); }
+        .hist-spacer { margin-left: auto; }
+        .hist-del {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: none;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-faint);
+            cursor: pointer;
+        }
+        .hist-del:hover { background: var(--warn-soft); color: var(--warn); }
+        .hist-edit:hover { background: var(--accent-soft); color: var(--accent); }
+        .hist-del:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+        .hist-ex { padding: 12px 0; border-bottom: 1px solid var(--border); }
+        .hist-ex:last-child { border-bottom: 0; }
+        .hist-name { font-weight: 600; }
+        .hist-tag {
+            margin-left: 6px;
+            padding: 1px 7px;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-size: .65rem;
+            font-weight: 700;
+            letter-spacing: .03em;
+        }
+        .hist-sets {
+            display: grid;
+            gap: 3px;
+            margin-top: 7px;
+            font-size: .85rem;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+        }
+        .hist-sets b {
+            color: var(--text-faint);
+            font-weight: 700;
+            font-size: .72rem;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            margin-right: 5px;
+        }
+        .hist-note {
+            margin: 10px 0 2px;
+            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            background: var(--surface-2);
+            font-size: .85rem;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+        }
+        .empty {
+            padding: 26px;
+            text-align: center;
+            color: var(--text-faint);
+            font-size: .9rem;
+            border: 1px dashed var(--border-strong);
+            border-radius: var(--radius);
+        }
+
+        /* ---------- Fortschritt ---------- */
+        .stat-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 11px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .stat-row:last-child { border-bottom: 0; }
+        .stat-name { flex: 1 1 auto; min-width: 0; font-weight: 600; }
+        .stat-name small {
+            display: block;
+            font-weight: 400;
+            font-size: .74rem;
+            color: var(--text-faint);
+            font-variant-numeric: tabular-nums;
+        }
+        .stat-best {
+            flex: none;
+            text-align: right;
+            font-size: .82rem;
+            font-variant-numeric: tabular-nums;
+            color: var(--text-muted);
+        }
+        .stat-best b { display: block; color: var(--text); font-size: .92rem; }
+        .spark { flex: none; color: var(--accent); }
+        .trend { font-weight: 700; font-size: .8rem; }
+        .trend.up { color: var(--accent-2); }
+        .trend.down { color: var(--warn); }
+        .trend.flat { color: var(--text-faint); }
+
+        /* ---------- Datenbereich ---------- */
+        .data-card { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 16px 18px; }
+        .data-note { flex: 1 1 220px; font-size: .78rem; color: var(--text-faint); }
+
+        /* ---------- Pausentimer ---------- */
+        .timer {
+            position: fixed;
+            left: 50%;
+            bottom: 18px;
+            z-index: 40;
+            display: none;
+            align-items: center;
+            gap: 6px;
+            padding: 6px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--surface);
+            box-shadow: var(--shadow-lg);
+            transform: translateX(-50%);
+        }
+        .timer.show { display: flex; }
+        .timer-label {
+            padding: 0 6px 0 10px;
+            font-size: .68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            color: var(--text-faint);
+        }
+        .timer-preset {
+            padding: 7px 11px;
+            border: 0;
+            border-radius: 999px;
+            background: var(--surface-2);
+            color: var(--text);
+            font: inherit;
+            font-size: .82rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            cursor: pointer;
+            transition: background .15s, color .15s;
+        }
+        .timer-preset:hover { background: var(--accent); color: var(--accent-on); }
+        .timer-preset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .timer-run { display: none; align-items: center; gap: 6px; }
+        .timer.running .timer-run { display: flex; }
+        .timer.running .timer-idle { display: none; }
+        .timer-time {
+            min-width: 68px;
+            padding: 0 6px;
+            text-align: center;
+            font-size: 1.15rem;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: .01em;
+        }
+        .timer.done .timer-time { color: var(--accent); animation: pulse .7s ease-in-out 3; }
+        @keyframes pulse { 50% { opacity: .25; } }
+        .timer-idle { display: flex; align-items: center; gap: 4px; }
+
+        /* ---------- Toast ---------- */
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 84px;
+            z-index: 50;
+            padding: 11px 20px;
+            border-radius: 999px;
+            background: var(--text);
+            color: var(--bg);
+            font-size: .875rem;
+            font-weight: 600;
+            box-shadow: var(--shadow-lg);
+            opacity: 0;
+            transform: translate(-50%, 16px);
+            pointer-events: none;
+            transition: opacity .2s, transform .2s;
+        }
+        .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+        /* ---------- Handy: Tabellenzeilen werden zu Karten ---------- */
+        @media (max-width: 760px) {
+            body { padding: 20px 12px 110px; }
+            /* alle Tage in eine Zeile quetschen statt umbrechen */
+            .day-btn { flex: 1 1 0; min-width: 0; padding: 10px 4px; font-size: .8rem; }
+            .head-controls { width: 100%; }
+            .stepper { flex: 1 1 auto; justify-content: space-between; }
+            /* Jede Übung wird zu einer eigenen Karte auf abgesetztem Grund –
+               so ist auf einen Blick klar, wo eine Übung anfängt und aufhört. */
+            .table-scroll {
+                overflow: visible;
+                padding: 10px;
+                background: var(--surface-2);
+            }
+            thead { display: none; }
+            table, tbody { display: block; }
+            tbody tr {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 9px 10px;
+                margin-bottom: 8px;
+                padding: 12px;
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                background: var(--surface);
+            }
+            tbody tr:last-child { margin-bottom: 0; }
+            tbody tr + tr td { border-top: 0; }
+            td { display: block; padding: 0; text-align: left; border: 0 !important; }
+            td[data-label]::before {
+                content: attr(data-label);
+                display: block;
+                margin-bottom: 3px;
+                font-size: .64rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: .06em;
+                color: var(--text-faint);
+            }
+            input.exercise-name { font-size: 16px; font-weight: 700; }
+
+            /* Unbenutzte Zeilen: nur Name und Löschen, der Rest klappt weg */
+            tr.row-empty {
+                grid-template-columns: 1fr auto;
+                padding: 8px 10px;
+                background: transparent;
+                border-style: dashed;
+            }
+            tr.row-empty .col-toggle,
+            tr.row-empty .col-set,
+            tr.row-empty .row-up,
+            tr.row-empty .row-down { display: none; }
+            tr.row-empty .col-name { grid-column: 1; grid-row: 1; }
+            tr.row-empty .col-actions { grid-column: 2; grid-row: 1; align-self: center; }
+            tr.row-empty input.exercise-name {
+                border: 0;
+                background: transparent;
+                font-weight: 600;
+                color: var(--text-muted);
+            }
+            /* Feste Plätze für Kopf und Aktionen: sonst rutschen die
+               Gewicht/Wdh-Paare der Sätze aus dem Zweispalter. */
+            .col-name { grid-column: 1 / -1; grid-row: 1; }
+            .col-toggle { grid-column: 1; grid-row: 2; width: auto; }
+            .col-actions {
+                grid-column: 2;
+                grid-row: 2;
+                width: auto;
+                justify-self: end;
+                align-self: center;
+            }
+            .row-actions { padding-top: 0; }
+            .switch { padding-top: 0; }
+            .switch-text { display: inline; }
+            tbody tr.unilateral .col-name {
+                box-shadow: none;
+                border-left: 3px solid var(--accent) !important;
+                padding-left: 10px;
+            }
+            input[type=text], input[type=number], textarea {
+                font-size: 16px; /* verhindert Auto-Zoom auf iOS */
+                padding: 9px;
+            }
+            .side-line + .side-line { margin-top: 4px; }
+            .hint { margin-top: 2px; }
+            /* Fortschrittszeilen umbrechen statt auf 375px zu quetschen */
+            .stat-row { flex-wrap: wrap; gap: 8px; padding: 12px 0; }
+            .stat-name { flex: 1 1 100%; }
+            .stat-best { flex: 1 1 auto; text-align: left; }
+            .spark { order: 2; margin-left: auto; }
+            .actions { flex-direction: column; align-items: stretch; }
+            .btn-primary { width: 100%; padding: 14px; }
+            .rest .btn-primary { width: auto; }
+            .timer { left: 12px; right: 12px; transform: none; justify-content: center; }
+            .timer-label { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="wrap">
+
+    <header class="app-header">
+        <h1>Workout Logbuch</h1>
+        <div class="header-right">
+            <span class="today" id="todayLabel"></span>
+            <button class="theme-toggle" id="themeToggle" type="button" onclick="toggleTheme()"
+                    aria-label="Design umschalten" title="Hell / Dunkel umschalten">
+                <svg class="icon-moon" width="17" height="17" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path>
+                </svg>
+                <svg class="icon-sun" width="17" height="17" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="4.2"></circle>
+                    <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <p class="section-label">Training wählen</p>
+    <div class="day-picker" id="dayPicker"></div>
+
+    <div class="edit-bar" id="editBar" style="display:none;">
+        <span class="edit-text">Du bearbeitest das Training vom <strong id="editDateLabel"></strong></span>
+        <button class="btn-ghost" type="button" onclick="backToToday()">Zurück zu heute</button>
+    </div>
+
+    <div id="trainingSections"></div>
+
+    <div class="card rest" id="restMessage" style="display:none;">
+        <div class="emoji">😴</div>
+        <h2>Pausentag</h2>
+        <p>Kein Training geplant. Gute Erholung! 💪</p>
+        <p class="rest-next">Als Nächstes: <strong id="restNextLabel"></strong></p>
+        <button class="btn-primary" type="button" onclick="finishRestDay()">Pause abhaken</button>
+    </div>
+
+    <div class="actions" id="actionsBar">
+        <div class="actions-left">
+            <span class="save-status" id="saveStatus"></span>
+        </div>
+        <button class="btn-primary" id="saveBtn" type="button" onclick="finishWorkout()">Training abschließen</button>
+    </div>
+
+    <p class="section-label" style="margin-top:40px;">Fortschritt</p>
+    <div id="progress"></div>
+
+    <p class="section-label" style="margin-top:32px;">Gespeicherte Trainings-Tage</p>
+    <div id="history"></div>
+
+    <p class="section-label" style="margin-top:32px;">Daten</p>
+    <div class="card data-card">
+        <button class="btn-ghost" type="button" onclick="exportBackup()">Backup exportieren</button>
+        <button class="btn-ghost" type="button" onclick="document.getElementById('importFile').click()">Backup importieren</button>
+        <input type="file" id="importFile" accept="application/json,.json" hidden onchange="importBackup(this)">
+        <span class="data-note">Alle Daten liegen nur in diesem Browser. Ein Backup schützt vor Verlust
+            beim Löschen der Browserdaten oder beim Wechsel des Geräts.</span>
+    </div>
+
+</div>
+
+<datalist id="exerciseNames"></datalist>
+
+<div class="timer" id="timer">
+    <div class="timer-idle">
+        <span class="timer-label">Pause</span>
+        <button class="timer-preset" type="button" onclick="startTimer(60)">1:00</button>
+        <button class="timer-preset" type="button" onclick="startTimer(90)">1:30</button>
+        <button class="timer-preset" type="button" onclick="startTimer(120)">2:00</button>
+        <button class="timer-preset" type="button" onclick="startTimer(180)">3:00</button>
+    </div>
+    <div class="timer-run">
+        <button class="timer-preset" type="button" onclick="addTimerTime(30)" title="30 Sekunden dazu">+30</button>
+        <span class="timer-time" id="timerTime">0:00</span>
+        <button class="timer-preset" type="button" onclick="stopTimer()">Stopp</button>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+
+<script>
+/* Der Rotations-Zyklus (Index = cycleDay), null = Pausentag.
+   Sechs Tage: A-Block, Pause, B-Block, Pause – dann von vorn. */
+const CYCLE = ["torsoA", "limbsA", null, "torsoB", "limbsB", null];
+const TRAINING_TYPES = [...new Set(CYCLE.filter(Boolean))];
+const DAY_LABELS = {
+    torsoA: "Torso A",
+    limbsA: "Limbs A",
+    torsoB: "Torso B",
+    limbsB: "Limbs B"
+};
+
+/* Zählt hoch, weil sich die Bedeutung von cycleDay geändert hat – siehe
+   Migration in getCycleDay(). */
+const CYCLE_VERSION = "2";
+const BACKUP_FORMAT = "gym-logbuch";
+
+function nextTrainingDay(day) {
+    let next = day;
+    do {
+        next = (next + 1) % CYCLE.length;
+    } while (!CYCLE[next] && next !== day);
+    return next;
+}
+
+/* ---------- Datenformat einer Übungs-Zeile ----------
+   [ Übungsname, einseitig("1"/""),
+     S1 kg L, S1 kg R, S1 Wdh L, S1 Wdh R,
+     S2 kg L, S2 kg R, S2 Wdh L, S2 Wdh R, ... ]
+   Ab Index 2 kommen die Sätze der Reihe nach, jeder mit 4 Werten. Das
+   entspricht exakt der DOM-Reihenfolge der Zahlenfelder einer Zeile –
+   dadurch passen Speichern, Laden und Hints ohne Extra-Mapping zusammen.
+   Weil die Sätze hintereinander liegen, ist ein Wechsel der Satzzahl
+   schlicht Abschneiden bzw. Auffüllen am Ende. */
+const VALUES_OFFSET = 2;
+
+/* Grenzen und Startwerte für die einstellbaren Zähler */
+const DEFAULT_SETS = 3,      MIN_SETS = 1,      MAX_SETS = 10;
+const DEFAULT_EXERCISES = 8, MIN_EXERCISES = 1, MAX_EXERCISES = 20;
+
+/* Pro Trainingstag: { sets, exercises } – wird persistent gespeichert */
+let settings = {};
+
+/* Datum, auf das gerade gebucht wird (ISO). Normalerweise heute – beim
+   Bearbeiten eines Eintrags aus der Historie das Datum jenes Trainings. */
+let workoutDate = todayISO();
+
+/* Gesetzt, solange ein zurückliegendes Training bearbeitet wird: { date, type }.
+   Die Zyklus-Position bleibt dabei unangetastet, es wird nur anders angezeigt. */
+let editing = null;
+
+/* Welche Historien-Einträge aufgeklappt sind – überlebt das Neu-Rendern */
+const openFolds = new Set();
+
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function rowLength(setCount) {
+    return VALUES_OFFSET + setCount * 4;
+}
+
+function valueIndex(set, kind, side) {
+    return VALUES_OFFSET + set * 4 + (kind === "weight" ? 0 : 2) + (side === "R" ? 1 : 0);
+}
+
+/* Wie viele Sätze stecken in einem gespeicherten Datensatz?
+   Das alte Format (Aufwärmsatz + 2 Arbeitssätze) hat 7 Felder und ist an der
+   nicht aufgehenden Division erkennbar. */
+function setsInRow(data) {
+    if (!Array.isArray(data)) return 0;
+    let rest = data.length - VALUES_OFFSET;
+    if (rest < 0 || rest % 4 !== 0) return 2;
+    return rest / 4;
+}
+
+/* Bringt einen gespeicherten Datensatz auf die gewünschte Satzzahl */
+function normalizeRow(data, setCount) {
+    let row = new Array(rowLength(setCount)).fill("");
+    if (!Array.isArray(data)) return row;
+
+    let rest = data.length - VALUES_OFFSET;
+    if (rest < 0 || rest % 4 !== 0) {
+        // altes Format: [Übung, Aufwärm-kg, Aufwärm-Wdh, S1-kg, S1-Wdh, S2-kg, S2-Wdh]
+        row[0] = data[0] ?? "";
+        [[3, 4], [5, 6]].forEach(([wi, ri], s) => {
+            if (s >= setCount) return;
+            row[valueIndex(s, "weight", "L")] = data[wi] ?? "";
+            row[valueIndex(s, "reps", "L")]   = data[ri] ?? "";
+        });
+        return row;
+    }
+
+    data.slice(0, row.length).forEach((val, i) => row[i] = val ?? "");
+    return row;
+}
+
+function rowIsEmpty(values) {
+    return !values[0] && values.slice(VALUES_OFFSET).every(v => !v);
+}
+
+/* Trainingsvolumen einer Zeile (kg × Wdh, bei einseitig beide Seiten) */
+function rowVolume(values, sets) {
+    let unilateral = values[1] === "1";
+    let total = 0;
+    for (let s = 0; s < sets; s++) {
+        let sides = unilateral ? ["L", "R"] : ["L"];
+        sides.forEach(side => {
+            let w = parseFloat(values[valueIndex(s, "weight", side)]);
+            let r = parseFloat(values[valueIndex(s, "reps", side)]);
+            if (w > 0 && r > 0) total += w * r;
+        });
+    }
+    return total;
+}
+
+/* Schwerstes tatsächlich bewegte Gewicht einer Zeile */
+function rowTopWeight(values, sets) {
+    let top = 0, reps = 0;
+    for (let s = 0; s < sets; s++) {
+        ["L", "R"].forEach(side => {
+            let w = parseFloat(values[valueIndex(s, "weight", side)]);
+            let r = parseFloat(values[valueIndex(s, "reps", side)]);
+            if (w > 0 && r > 0 && w > top) { top = w; reps = r; }
+        });
+    }
+    return { weight: top, reps: reps };
+}
+
+function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, c => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+}
+
+function exerciseKey(name) {
+    return String(name || "").trim().toLowerCase();
+}
+
+/* ---------- Datum ---------- */
+function todayISO() {
+    let d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function isoToDisplay(iso) {
+    let [y, m, d] = String(iso).split("-");
+    return `${d}.${m}.${y}`;
+}
+
+function displayToIso(display) {
+    let [d, m, y] = String(display).split(".");
+    return `${y}-${m}-${d}`;
+}
+
+/* ---------- Storage-Helfer ----------
+   Nutzt die persistente Artifact-Storage, wenn verfügbar (Claude-Vorschau).
+   Läuft die Seite als eigenständige HTML-Datei in einem normalen Browser
+   (dort existiert window.storage nicht), wird automatisch auf localStorage
+   umgeschaltet, damit Speichern/Laden trotzdem funktioniert. */
+const hasArtifactStorage = typeof window.storage !== "undefined";
+
+async function storageGet(key, fallback = null) {
+    if (hasArtifactStorage) {
+        try {
+            const result = await window.storage.get(key, false);
+            return result ? result.value : fallback;
+        } catch (e) {
+            return fallback;
+        }
+    }
+    try {
+        const value = localStorage.getItem(key);
+        return value !== null ? value : fallback;
+    } catch (e) {
+        // localStorage kann komplett gesperrt sein (Privatmodus, data:-URL).
+        // Dann läuft die App eben ohne Gedächtnis weiter statt abzustürzen.
+        return fallback;
+    }
+}
+
+async function storageSet(key, value) {
+    if (hasArtifactStorage) {
+        try {
+            await window.storage.set(key, value, false);
+        } catch (e) {
+            console.error("Storage-Fehler:", e);
+        }
+        return;
+    }
+    try {
+        localStorage.setItem(key, value);
+    } catch (e) {
+        console.warn("Speichern nicht möglich:", e);
+    }
+}
+
+async function getWorkouts() {
+    try {
+        let list = JSON.parse(await storageGet("workouts", "[]"));
+        return Array.isArray(list) ? list : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+async function setWorkouts(list) {
+    await storageSet("workouts", JSON.stringify(list));
+}
+
+/* Chronologisch aufsteigend – die Reihenfolge im Speicher ist die des
+   Eintragens und stimmt bei nachgetragenen Trainings nicht mit dem Datum. */
+function sortedWorkouts(list) {
+    return [...list].sort((a, b) => displayToIso(a.date).localeCompare(displayToIso(b.date)));
+}
+
+/* ---------- Einstellungen pro Trainingstag ---------- */
+async function loadSettings() {
+    let stored;
+    try {
+        stored = JSON.parse(await storageGet("settings", "{}"));
+    } catch (e) {
+        stored = {};
+    }
+
+    TRAINING_TYPES.forEach(type => {
+        let s = (stored && stored[type]) || {};
+        settings[type] = {
+            sets: clamp(Number(s.sets) || DEFAULT_SETS, MIN_SETS, MAX_SETS),
+            exercises: clamp(Number(s.exercises) || DEFAULT_EXERCISES, MIN_EXERCISES, MAX_EXERCISES)
+        };
+    });
+}
+
+async function saveSettings() {
+    await storageSet("settings", JSON.stringify(settings));
+}
+
+/* ---------- Theme ----------
+   Der Startwert kommt aus der Systemeinstellung (siehe Skript im <head>),
+   ab dem ersten Klick gilt die manuelle Wahl – dauerhaft. */
+function toggleTheme() {
+    let next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try {
+        localStorage.setItem("theme", next);
+    } catch (e) {
+        console.warn("Theme konnte nicht gespeichert werden:", e);
+    }
+}
+
+function showToast(message) {
+    let toast = document.getElementById("toast");
+    toast.textContent = message;
+    toast.classList.add("show");
+    clearTimeout(showToast.timer);
+    showToast.timer = setTimeout(() => toast.classList.remove("show"), 2200);
+}
+
+/* ---------- Tabellen dynamisch aufbauen (DRY + macht Hints möglich) ---------- */
+function iconButton(className, label, svg, onClick) {
+    let btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = className;
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.innerHTML = svg;
+    btn.onclick = onClick;
+    return btn;
+}
+
+const ICON_UP = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>`;
+const ICON_DOWN = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+const ICON_X = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+const ICON_EDIT = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>`;
+
+function buildSideBlock(kind, side, type) {
+    let line = document.createElement("div");
+    line.className = "side-line" + (side === "R" ? " side-right" : "");
+
+    let label = document.createElement("span");
+    label.className = "side-label";
+    label.textContent = side;
+    line.appendChild(label);
+
+    let field = document.createElement("div");
+    field.className = "side-field";
+
+    let input = document.createElement("input");
+    input.type = "number";
+    input.step = kind === "weight" ? "0.5" : "1";
+    input.inputMode = kind === "weight" ? "decimal" : "numeric";
+    input.placeholder = kind === "weight" ? "kg" : "Wdh";
+    input.oninput = () => onTableEdited(type);
+
+    let hint = document.createElement("small");
+    hint.className = "hint";
+
+    field.appendChild(input);
+    field.appendChild(hint);
+    line.appendChild(field);
+
+    return line;
+}
+
+function buildExerciseRow(type, setCount) {
+    let tr = document.createElement("tr");
+
+    let nameTd = document.createElement("td");
+    nameTd.className = "col-name";
+    let nameWrap = document.createElement("div");
+    nameWrap.className = "name-wrap";
+    let nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "exercise-name";
+    nameInput.placeholder = "Übung";
+    nameInput.setAttribute("list", "exerciseNames");
+    nameInput.oninput = () => onTableEdited(type, true);
+    let prBadge = document.createElement("span");
+    prBadge.className = "pr-badge";
+    prBadge.textContent = "PR";
+    prBadge.title = "Schwerer als je zuvor bei dieser Übung";
+    nameWrap.append(nameInput, prBadge);
+    nameTd.appendChild(nameWrap);
+    tr.appendChild(nameTd);
+
+    let toggleTd = document.createElement("td");
+    toggleTd.className = "col-toggle";
+    let switchLabel = document.createElement("label");
+    switchLabel.className = "switch";
+    switchLabel.title = "Übung einseitig ausgeführt – links und rechts getrennt eintragen";
+    let toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.className = "unilateral-toggle";
+    toggle.onchange = () => {
+        tr.classList.toggle("unilateral", toggle.checked);
+        onTableEdited(type);
+    };
+    let track = document.createElement("span");
+    track.className = "track";
+    let switchText = document.createElement("span");
+    switchText.className = "switch-text";
+    switchText.textContent = "Einseitig";
+    switchLabel.append(toggle, track, switchText);
+    toggleTd.appendChild(switchLabel);
+    tr.appendChild(toggleTd);
+
+    for (let s = 0; s < setCount; s++) {
+        ["weight", "reps"].forEach(kind => {
+            let td = document.createElement("td");
+            td.className = "col-set" + (kind === "weight" ? " set-start" : "");
+            // kurz halten – die Beschriftung erscheint nur in der Handy-Ansicht
+            td.dataset.label = kind === "weight" ? `Satz ${s + 1} · kg` : "Wdh";
+            td.appendChild(buildSideBlock(kind, "L", type));
+            td.appendChild(buildSideBlock(kind, "R", type));
+            tr.appendChild(td);
+        });
+    }
+
+    let actionsTd = document.createElement("td");
+    actionsTd.className = "col-actions";
+    let actions = document.createElement("div");
+    actions.className = "row-actions";
+    actions.append(
+        iconButton("row-btn row-up", "Nach oben", ICON_UP, () => moveRow(type, tr, -1)),
+        iconButton("row-btn row-down", "Nach unten", ICON_DOWN, () => moveRow(type, tr, 1)),
+        iconButton("row-btn row-del", "Übung löschen", ICON_X, () => deleteRow(type, tr))
+    );
+    actionsTd.appendChild(actions);
+    tr.appendChild(actionsTd);
+
+    return tr;
+}
+
+/* ---------- Zeile lesen / schreiben ---------- */
+function rowSetCount(row) {
+    return row.querySelectorAll("input[type=number]").length / 4;
+}
+
+function readRow(row) {
+    let values = [
+        row.querySelector(".exercise-name").value,
+        row.querySelector(".unilateral-toggle").checked ? "1" : ""
+    ];
+    row.querySelectorAll("input[type=number]").forEach(input => values.push(input.value));
+    return values;
+}
+
+function writeRow(row, data) {
+    let values = normalizeRow(data, rowSetCount(row));
+
+    row.querySelector(".exercise-name").value = values[0];
+
+    let toggle = row.querySelector(".unilateral-toggle");
+    toggle.checked = values[1] === "1";
+    row.classList.toggle("unilateral", toggle.checked);
+
+    row.querySelectorAll("input[type=number]").forEach((input, i) => {
+        input.value = values[i + VALUES_OFFSET];
+    });
+
+    markRowEmpty(row);
+}
+
+/* Noch unbenutzte Zeilen werden auf dem Handy zusammengeklappt – sonst füllen
+   sie den halben Bildschirm mit leeren Feldern. */
+function markRowEmpty(row) {
+    let values = readRow(row);
+    row.classList.toggle("row-empty", rowIsEmpty(values) && values[1] !== "1");
+}
+
+function clearRow(row) {
+    writeRow(row, null);
+}
+
+function buildTable(type) {
+    let { sets, exercises } = settings[type];
+
+    let table = document.createElement("table");
+    table.id = type + "Table";
+
+    let setHeads = "";
+    let subHeads = "";
+    for (let s = 1; s <= sets; s++) {
+        setHeads += `<th colspan="2" class="set-start">Satz ${s}</th>`;
+        subHeads += `<th class="col-set set-start">Gewicht</th><th class="col-set">Wdh</th>`;
+    }
+
+    let thead = document.createElement("thead");
+    thead.innerHTML = `
+        <tr>
+            <th rowspan="2" class="col-name">Übung</th>
+            <th rowspan="2" class="col-toggle">Einseitig</th>
+            ${setHeads}
+            <th rowspan="2" class="col-actions"></th>
+        </tr>
+        <tr>
+            ${subHeads}
+        </tr>`;
+    table.appendChild(thead);
+
+    let tbody = document.createElement("tbody");
+    for (let i = 0; i < exercises; i++) {
+        tbody.appendChild(buildExerciseRow(type, sets));
+    }
+    table.appendChild(tbody);
+
+    return table;
+}
+
+/* ---------- Zeilen verschieben / löschen ---------- */
+function updateRowButtons(type) {
+    let rows = [...document.querySelectorAll(`#${type}Table tbody tr`)];
+    rows.forEach((row, i) => {
+        row.querySelector(".row-up").disabled = i === 0;
+        row.querySelector(".row-down").disabled = i === rows.length - 1;
+        row.querySelector(".row-del").disabled = rows.length <= MIN_EXERCISES;
+    });
+}
+
+async function moveRow(type, row, delta) {
+    let tbody = row.parentElement;
+    let rows = [...tbody.children];
+    let from = rows.indexOf(row);
+    let to = from + delta;
+    if (to < 0 || to >= rows.length) return;
+
+    if (delta < 0) tbody.insertBefore(row, rows[to]);
+    else tbody.insertBefore(rows[to], row);
+
+    updateRowButtons(type);
+    await onTableEdited(type, true);
+}
+
+async function deleteRow(type, row) {
+    let tbody = row.parentElement;
+    if (tbody.children.length <= MIN_EXERCISES) return;
+
+    let values = readRow(row);
+    if (!rowIsEmpty(values)) {
+        let label = values[0] ? `„${values[0]}“` : "Diese Übung";
+        if (!confirm(`${label} enthält Einträge und wird gelöscht. Fortfahren?`)) return;
+    }
+
+    row.remove();
+    settings[type].exercises = tbody.children.length;
+    await saveSettings();
+    updateSteppers(type);
+    updateRowButtons(type);
+    await onTableEdited(type, true);
+}
+
+/* ---------- Zähler für Sätze / Übungen ---------- */
+function buildStepper(key, label, onStep) {
+    let wrap = document.createElement("div");
+    wrap.className = "stepper";
+    wrap.dataset.stepper = key;
+
+    let name = document.createElement("span");
+    name.className = "stepper-label";
+    name.textContent = label;
+
+    let dec = document.createElement("button");
+    dec.type = "button";
+    dec.className = "step-btn step-dec";
+    dec.textContent = "−";
+    dec.setAttribute("aria-label", label + " verringern");
+    dec.onclick = () => onStep(-1);
+
+    let value = document.createElement("span");
+    value.className = "stepper-value";
+
+    let inc = document.createElement("button");
+    inc.type = "button";
+    inc.className = "step-btn step-inc";
+    inc.textContent = "+";
+    inc.setAttribute("aria-label", label + " erhöhen");
+    inc.onclick = () => onStep(1);
+
+    wrap.append(name, dec, value, inc);
+    return wrap;
+}
+
+function updateSteppers(type) {
+    let card = document.getElementById(type + "Section");
+    let { sets, exercises } = settings[type];
+
+    let apply = (key, value, min, max) => {
+        let stepper = card.querySelector(`[data-stepper="${key}"]`);
+        stepper.querySelector(".stepper-value").textContent = value;
+        stepper.querySelector(".step-dec").disabled = value <= min;
+        stepper.querySelector(".step-inc").disabled = value >= max;
+    };
+
+    apply("sets", sets, MIN_SETS, MAX_SETS);
+    apply("exercises", exercises, MIN_EXERCISES, MAX_EXERCISES);
+}
+
+/* Satzzahl ändern: Eingaben retten, Tabelle neu aufbauen, Werte zurückschreiben.
+   Weil die Sätze im Datensatz hintereinander liegen, übernimmt normalizeRow()
+   das Kürzen bzw. Auffüllen von allein. */
+async function changeSetCount(type, delta) {
+    let current = settings[type].sets;
+    let next = clamp(current + delta, MIN_SETS, MAX_SETS);
+    if (next === current) return;
+
+    let rows = [...document.querySelectorAll(`#${type}Table tbody tr`)].map(readRow);
+
+    if (next < current) {
+        let losesData = rows.some(row => row.slice(rowLength(next)).some(v => v));
+        if (losesData && !confirm(
+                `Die Werte ab Satz ${next + 1} gehen in dieser Tabelle verloren. Trotzdem ändern?`)) {
+            return;
+        }
+    }
+
+    settings[type].sets = next;
+    await saveSettings();
+
+    document.getElementById(type + "Table").replaceWith(buildTable(type));
+    document.querySelectorAll(`#${type}Table tbody tr`).forEach((row, i) => writeRow(row, rows[i]));
+
+    updateSteppers(type);
+    updateRowButtons(type);
+    await onTableEdited(type, true);
+}
+
+/* Übungszahl ändern: nur Zeilen anhängen bzw. am Ende entfernen */
+async function changeExerciseCount(type, delta) {
+    let tbody = document.querySelector(`#${type}Table tbody`);
+    let current = tbody.children.length;
+    let next = clamp(current + delta, MIN_EXERCISES, MAX_EXERCISES);
+    if (next === current) return;
+
+    if (next < current) {
+        let removed = [...tbody.children].slice(next).map(readRow);
+        let count = current - next;
+        let frage = count === 1
+            ? "Die letzte Übung enthält Einträge. Trotzdem entfernen?"
+            : `Die letzten ${count} Übungen enthalten Einträge. Trotzdem entfernen?`;
+        if (removed.some(row => !rowIsEmpty(row)) && !confirm(frage)) return;
+        while (tbody.children.length > next) tbody.lastElementChild.remove();
+    } else {
+        for (let i = current; i < next; i++) {
+            tbody.appendChild(buildExerciseRow(type, settings[type].sets));
+        }
+    }
+
+    settings[type].exercises = next;
+    await saveSettings();
+
+    updateSteppers(type);
+    updateRowButtons(type);
+    await onTableEdited(type, true);
+}
+
+function buildSections() {
+    let container = document.getElementById("trainingSections");
+    TRAINING_TYPES.forEach(type => {
+        let card = document.createElement("section");
+        card.className = "card";
+        card.id = type + "Section";
+        card.style.display = "none";
+
+        let head = document.createElement("div");
+        head.className = "card-head";
+
+        let title = document.createElement("div");
+        title.innerHTML = `<h2>${DAY_LABELS[type]}</h2>
+            <span class="card-note">„Einseitig“ blendet L/R getrennt ein</span>`;
+
+        let controls = document.createElement("div");
+        controls.className = "head-controls";
+        controls.append(
+            buildStepper("sets", "Sätze", delta => changeSetCount(type, delta)),
+            buildStepper("exercises", "Übungen", delta => changeExerciseCount(type, delta))
+        );
+
+        head.append(title, controls);
+        card.appendChild(head);
+
+        let scroll = document.createElement("div");
+        scroll.className = "table-scroll";
+        scroll.appendChild(buildTable(type));
+        card.appendChild(scroll);
+
+        let noteWrap = document.createElement("div");
+        noteWrap.className = "note-wrap";
+        let noteLabel = document.createElement("label");
+        noteLabel.textContent = "Notiz";
+        noteLabel.setAttribute("for", type + "Note");
+        let note = document.createElement("textarea");
+        note.className = "note-input";
+        note.id = type + "Note";
+        note.rows = 2;
+        note.placeholder = "Tagesform, Schmerzen, Beobachtungen …";
+        note.oninput = () => onTableEdited(type);
+        noteWrap.append(noteLabel, note);
+        card.appendChild(noteWrap);
+
+        container.appendChild(card);
+        updateSteppers(type);
+        updateRowButtons(type);
+    });
+}
+
+/* ---------- Autosave ----------
+   Jede Eingabe landet verzögert im Speicher. „Training abschließen“ schaltet
+   danach nur noch den Zyklus weiter – verloren gehen kann so nichts mehr. */
+let autosaveTimer = null;
+let autosavePending = null;
+
+function setSaveStatus(text) {
+    document.getElementById("saveStatus").textContent = text;
+}
+
+async function onTableEdited(type, refreshHints = false) {
+    setSaveStatus("Ungespeicherte Änderung …");
+    autosavePending = type;
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => flushAutosave(), 700);
+
+    if (refreshHints) await updateHints(type);
+    else await updatePrBadges(type);
+}
+
+async function flushAutosave() {
+    clearTimeout(autosaveTimer);
+    let type = autosavePending;
+    autosavePending = null;
+    if (!type) return;
+
+    await persistWorkout(type);
+    setSaveStatus("Automatisch gespeichert · " +
+        new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }));
+    await refreshDerived();
+}
+
+/* Schreibt den aktuellen Tabellenstand unter (Datum, Typ) in die Historie.
+   Ist alles leer, wird ein bestehender Eintrag wieder entfernt – sonst
+   sammelt die Historie leere Tage. */
+async function persistWorkout(type) {
+    let rows = [...document.querySelectorAll(`#${type}Table tbody tr`)].map(readRow);
+    let note = document.getElementById(type + "Note").value;
+    let date = isoToDisplay(workoutDate);
+
+    let history = await getWorkouts();
+    let index = history.findIndex(w => w.date === date && w.type === type);
+    let hasContent = rows.some(row => !rowIsEmpty(row)) || note.trim() !== "";
+
+    if (!hasContent) {
+        if (index !== -1) {
+            history.splice(index, 1);
+            await setWorkouts(history);
+        }
+        return;
+    }
+
+    let workout = { date: date, type: type, data: rows, note: note };
+    if (index !== -1) history[index] = workout;
+    else history.push(workout);
+
+    await setWorkouts(history);
+}
+
+/* ---------- Laden ---------- */
+async function loadWorkoutInto(type) {
+    let history = await getWorkouts();
+    let date = isoToDisplay(workoutDate);
+    let rows = document.querySelectorAll(`#${type}Table tbody tr`);
+    let note = document.getElementById(type + "Note");
+
+    let current = history.find(w => w.date === date && w.type === type);
+    if (current) {
+        rows.forEach((row, i) => writeRow(row, current.data[i]));
+        note.value = current.note || "";
+        return;
+    }
+
+    // sonst als Vorlage das letzte Training dieses Typs vor diesem Datum
+    let earlier = sortedWorkouts(history)
+        .filter(w => w.type === type && displayToIso(w.date) < workoutDate);
+    let template = earlier[earlier.length - 1];
+
+    note.value = "";
+    rows.forEach((row, i) => {
+        if (!template || !template.data[i]) { clearRow(row); return; }
+        // Vorlage: nur Name und Einseitig-Flag, die Zahlen trägt man frisch ein
+        let values = normalizeRow(template.data[i], rowSetCount(row));
+        clearRow(row);
+        row.querySelector(".exercise-name").value = values[0];
+        let toggle = row.querySelector(".unilateral-toggle");
+        toggle.checked = values[1] === "1";
+        row.classList.toggle("unilateral", toggle.checked);
+    });
+}
+
+/* ---------- Vergleichswerte + PR ----------
+   Zuordnung über den Übungsnamen, nicht über die Zeilennummer – sonst zeigt
+   eine eingeschobene Übung die Werte ihres Vorgängers an. */
+async function previousByName(type) {
+    let history = await getWorkouts();
+    let map = new Map();
+
+    sortedWorkouts(history)
+        .filter(w => displayToIso(w.date) < workoutDate)
+        .forEach(w => {
+            let sameType = w.type === type;
+            (w.data || []).forEach(rowData => {
+                let sets = setsInRow(rowData);
+                let values = normalizeRow(rowData, sets);
+                let key = exerciseKey(values[0]);
+                if (!key || rowIsEmpty(values)) return;
+                // spätere Sessions überschreiben frühere; fremde Trainingstage
+                // zählen auch, falls dieselbe Übung dort vorkommt
+                map.set(key, { values, sets, date: w.date, sameType });
+            });
+        });
+
+    return map;
+}
+
+async function bestWeights() {
+    let history = await getWorkouts();
+    let best = new Map();
+
+    sortedWorkouts(history)
+        .filter(w => displayToIso(w.date) < workoutDate)
+        .forEach(w => (w.data || []).forEach(rowData => {
+            let sets = setsInRow(rowData);
+            let values = normalizeRow(rowData, sets);
+            let key = exerciseKey(values[0]);
+            if (!key) return;
+            let top = rowTopWeight(values, sets).weight;
+            if (top > (best.get(key) || 0)) best.set(key, top);
+        }));
+
+    return best;
+}
+
+async function updateHints(type) {
+    let previous = await previousByName(type);
+    let history = await getWorkouts();
+
+    // Fallback nach Position, solange eine Zeile noch keinen Namen hat
+    let earlier = sortedWorkouts(history)
+        .filter(w => w.type === type && displayToIso(w.date) < workoutDate);
+    let lastSession = earlier[earlier.length - 1];
+
+    document.querySelectorAll(`#${type}Table tbody tr`).forEach((row, rowIndex) => {
+        let sets = rowSetCount(row);
+        let name = exerciseKey(row.querySelector(".exercise-name").value);
+        let match = name ? previous.get(name) : null;
+
+        let data = null;
+        if (match) data = normalizeRow(match.values, sets);
+        else if (!name && lastSession) data = normalizeRow(lastSession.data[rowIndex], sets);
+
+        row.querySelectorAll(".hint").forEach((hint, i) => {
+            let value = data ? data[i + VALUES_OFFSET] : "";
+            hint.textContent = value ? `zuletzt: ${value}` : "";
+        });
+    });
+
+    await updatePrBadges(type);
+}
+
+async function updatePrBadges(type) {
+    let best = await bestWeights();
+
+    document.querySelectorAll(`#${type}Table tbody tr`).forEach(row => {
+        let name = exerciseKey(row.querySelector(".exercise-name").value);
+        let sets = rowSetCount(row);
+        let top = rowTopWeight(readRow(row), sets).weight;
+        let previousBest = best.get(name) || 0;
+        let isPr = Boolean(name) && top > 0 && previousBest > 0 && top > previousBest;
+        row.querySelector(".pr-badge").classList.toggle("show", isPr);
+        markRowEmpty(row);
+    });
+}
+
+/* ---------- Übungsnamen für die Autovervollständigung ---------- */
+async function refreshExerciseNames() {
+    let history = await getWorkouts();
+    let names = new Map(); // Kleinschreibung -> zuletzt benutzte Schreibweise
+
+    sortedWorkouts(history).forEach(w => (w.data || []).forEach(rowData => {
+        let name = String(normalizeRow(rowData, setsInRow(rowData))[0] || "").trim();
+        if (name) names.set(name.toLowerCase(), name);
+    }));
+
+    document.getElementById("exerciseNames").innerHTML =
+        [...names.values()].sort((a, b) => a.localeCompare(b, "de"))
+            .map(n => `<option value="${escapeHtml(n)}"></option>`).join("");
+}
+
+/* ---------- Historie ---------- */
+function foldChevron() {
+    return `<svg class="chevron" width="15" height="15" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline></svg>`;
+}
+
+function buildHistoryEntry(workout) {
+    let foldKey = workout.date + "|" + workout.type;
+
+    let item = document.createElement("div");
+    item.className = "fold-item history-item" + (openFolds.has(foldKey) ? " open" : "");
+
+    let head = document.createElement("button");
+    head.type = "button";
+    head.className = "fold-head";
+    head.innerHTML = `
+        <span class="history-date">${escapeHtml(workout.date)}</span>
+        <span class="badge${workout.type.startsWith("limbs") ? " limbs" : ""}">${escapeHtml(DAY_LABELS[workout.type] || workout.type)}</span>
+        <span class="hist-spacer"></span>
+        ${foldChevron()}`;
+    head.onclick = () => {
+        item.classList.toggle("open");
+        if (item.classList.contains("open")) openFolds.add(foldKey);
+        else openFolds.delete(foldKey);
+    };
+
+    let edit = iconButton("hist-del hist-edit", "Training ändern", ICON_EDIT, event => {
+        event.stopPropagation();
+        editWorkout(workout);
+    });
+
+    let del = iconButton("hist-del", "Training löschen", ICON_X, event => {
+        event.stopPropagation();
+        deleteWorkout(workout);
+    });
+
+    let body = document.createElement("div");
+    body.className = "fold-body";
+
+    (workout.data || []).forEach(rowData => {
+        // Satzzahl kommt aus dem Datensatz selbst – ältere Trainings können
+        // mit einer anderen Anzahl gespeichert worden sein als heute eingestellt
+        let sets = setsInRow(rowData);
+        let row = normalizeRow(rowData, sets);
+        if (row[0] === "") return;
+
+        let unilateral = row[1] === "1";
+        let lines = "";
+
+        for (let s = 0; s < sets; s++) {
+            let wL = row[valueIndex(s, "weight", "L")];
+            let rL = row[valueIndex(s, "reps", "L")];
+            let wR = row[valueIndex(s, "weight", "R")];
+            let rR = row[valueIndex(s, "reps", "R")];
+
+            if (unilateral) {
+                if (!wL && !rL && !wR && !rR) continue;
+                lines += `<div><b>S${s + 1}</b>L ${escapeHtml(wL)} kg × ${escapeHtml(rL)} &nbsp;·&nbsp; R ${escapeHtml(wR)} kg × ${escapeHtml(rR)}</div>`;
+            } else {
+                if (!wL && !rL) continue;
+                lines += `<div><b>S${s + 1}</b>${escapeHtml(wL)} kg × ${escapeHtml(rL)}</div>`;
+            }
+        }
+
+        if (!lines) return;
+
+        let volume = rowVolume(row, sets);
+        let ex = document.createElement("div");
+        ex.className = "hist-ex";
+        ex.innerHTML = `<span class="hist-name">${escapeHtml(row[0])}</span>` +
+                       (unilateral ? `<span class="hist-tag">einseitig</span>` : "") +
+                       `<div class="hist-sets">${lines}` +
+                       (volume > 0 ? `<div><b>Vol</b>${Math.round(volume).toLocaleString("de-DE")} kg</div>` : "") +
+                       `</div>`;
+        body.appendChild(ex);
+    });
+
+    if (workout.note && workout.note.trim()) {
+        let note = document.createElement("div");
+        note.className = "hist-note";
+        note.textContent = workout.note.trim();
+        body.appendChild(note);
+    }
+
+    if (!body.children.length) {
+        body.innerHTML = `<div class="hist-ex" style="color:var(--text-faint)">Keine Übungen eingetragen.</div>`;
+    }
+
+    let chevron = head.querySelector(".chevron");
+    head.insertBefore(edit, chevron);
+    head.insertBefore(del, chevron);
+    item.append(head, body);
+    return item;
+}
+
+async function deleteWorkout(workout) {
+    if (!confirm(`Training vom ${workout.date} (${DAY_LABELS[workout.type] || workout.type}) löschen?`)) return;
+
+    let history = await getWorkouts();
+    let index = history.findIndex(w => w.date === workout.date && w.type === workout.type);
+    if (index === -1) return;
+
+    history.splice(index, 1);
+    await setWorkouts(history);
+    openFolds.delete(workout.date + "|" + workout.type);
+
+    showToast("Training gelöscht");
+    await refreshDerived();
+
+    // Wurde ausgerechnet der Eintrag gelöscht, der gerade bearbeitet wird,
+    // gibt es nichts mehr zu bearbeiten.
+    if (editing && editing.date === workout.date && editing.type === workout.type) {
+        await backToToday();
+        return;
+    }
+
+    let shownType = editing ? editing.type : CYCLE[await getCycleDay()];
+    if (!shownType) return;
+
+    // Stand der gelöschte Eintrag gerade in der Tabelle, Felder neu füllen …
+    if (shownType === workout.type && isoToDisplay(workoutDate) === workout.date) {
+        await loadWorkoutInto(shownType);
+    }
+    // … und die Vergleichswerte in jedem Fall neu ziehen: das gelöschte
+    // Training kann auch die Referenz für ein anderes Datum gewesen sein.
+    await updateHints(shownType);
+}
+
+async function displayHistory() {
+    let history = await getWorkouts();
+    let container = document.getElementById("history");
+    container.innerHTML = "";
+
+    if (history.length === 0) {
+        container.innerHTML = `<div class="empty">Noch keine Trainings gespeichert.</div>`;
+        return;
+    }
+
+    sortedWorkouts(history).reverse().forEach(workout => {
+        container.appendChild(buildHistoryEntry(workout));
+    });
+}
+
+/* ---------- Fortschritt ---------- */
+function sparkline(values) {
+    if (values.length < 2) return "";
+    let w = 84, h = 22;
+    let max = Math.max(...values), min = Math.min(...values);
+    let range = max - min || 1;
+    let points = values.map((v, i) => {
+        let x = (i / (values.length - 1)) * (w - 3) + 1.5;
+        let y = h - 1.5 - ((v - min) / range) * (h - 3);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" fill="none" aria-hidden="true">
+        <polyline points="${points}" stroke="currentColor" stroke-width="1.6"
+                  stroke-linejoin="round" stroke-linecap="round"></polyline></svg>`;
+}
+
+/* Gesamtvolumen je Trainingstag über die Zeit */
+async function collectDayStats() {
+    let history = await getWorkouts();
+    let byType = new Map();
+
+    sortedWorkouts(history).forEach(w => {
+        let total = (w.data || []).reduce((sum, rowData) => {
+            let sets = setsInRow(rowData);
+            return sum + rowVolume(normalizeRow(rowData, sets), sets);
+        }, 0);
+        if (total <= 0) return;
+
+        let entry = byType.get(w.type) || { type: w.type, sessions: [] };
+        entry.sessions.push({ date: w.date, volume: total });
+        byType.set(w.type, entry);
+    });
+
+    // in der Reihenfolge des Zyklus, nicht nach Zufall
+    return TRAINING_TYPES.map(t => byType.get(t)).filter(Boolean);
+}
+
+/* Zeile für die Fortschrittsliste: Name, Verlauf, Bestwert */
+function statRow(title, subtitle, volumes, bestHtml) {
+    let last = volumes[volumes.length - 1];
+    let previous = volumes.length > 1 ? volumes[volumes.length - 2] : null;
+
+    let trend = { cls: "flat", text: "" };
+    if (previous !== null && previous > 0) {
+        let change = Math.round(((last - previous) / previous) * 100);
+        if (change > 0) trend = { cls: "up", text: `+${change} %` };
+        else if (change < 0) trend = { cls: "down", text: `${change} %` };
+        else trend = { cls: "flat", text: "±0 %" };
+    }
+
+    let row = document.createElement("div");
+    row.className = "stat-row";
+    row.innerHTML = `
+        <span class="stat-name">${escapeHtml(title)}
+            <small>${escapeHtml(subtitle)}
+                <span class="trend ${trend.cls}">${trend.text}</span></small></span>
+        ${sparkline(volumes.slice(-12))}
+        <span class="stat-best">${bestHtml}</span>`;
+    return row;
+}
+
+function foldCard(key, title, badge) {
+    let item = document.createElement("div");
+    item.className = "fold-item" + (openFolds.has(key) ? " open" : "");
+
+    let head = document.createElement("button");
+    head.type = "button";
+    head.className = "fold-head";
+    head.innerHTML = `<span class="history-date">${escapeHtml(title)}</span>
+        <span class="badge">${escapeHtml(badge)}</span>
+        <span class="hist-spacer"></span>${foldChevron()}`;
+    head.onclick = () => {
+        item.classList.toggle("open");
+        if (item.classList.contains("open")) openFolds.add(key);
+        else openFolds.delete(key);
+    };
+
+    let body = document.createElement("div");
+    body.className = "fold-body";
+
+    item.append(head, body);
+    return { item, body };
+}
+
+async function collectStats() {
+    let history = await getWorkouts();
+    let stats = new Map();
+
+    sortedWorkouts(history).forEach(w => (w.data || []).forEach(rowData => {
+        let sets = setsInRow(rowData);
+        let values = normalizeRow(rowData, sets);
+        let key = exerciseKey(values[0]);
+        if (!key) return;
+
+        let volume = rowVolume(values, sets);
+        let top = rowTopWeight(values, sets);
+        if (volume <= 0 && top.weight <= 0) return;
+
+        let entry = stats.get(key) || { name: String(values[0]).trim(), sessions: [], best: { weight: 0, reps: 0, date: "" } };
+        entry.name = String(values[0]).trim();
+        entry.sessions.push({ date: w.date, volume: volume });
+        if (top.weight > entry.best.weight) entry.best = { weight: top.weight, reps: top.reps, date: w.date };
+        stats.set(key, entry);
+    }));
+
+    return [...stats.values()].sort((a, b) => {
+        let da = displayToIso(a.sessions[a.sessions.length - 1].date);
+        let db = displayToIso(b.sessions[b.sessions.length - 1].date);
+        return db.localeCompare(da);
+    });
+}
+
+function kg(value) {
+    return Math.round(value).toLocaleString("de-DE") + " kg";
+}
+
+function statSubtitle(sessions, volumes) {
+    return `${sessions} ${sessions === 1 ? "Session" : "Sessions"}` +
+           ` · zuletzt ${kg(volumes[volumes.length - 1])} Volumen`;
+}
+
+async function displayProgress() {
+    let days = await collectDayStats();
+    let stats = await collectStats();
+    let container = document.getElementById("progress");
+    container.innerHTML = "";
+
+    if (!days.length && !stats.length) {
+        container.innerHTML = `<div class="empty">Noch keine Werte – nach dem ersten Training erscheint hier die Entwicklung.</div>`;
+        return;
+    }
+
+    if (days.length) {
+        let card = foldCard("progress-days", `${days.length} ${days.length === 1 ? "Trainingstag" : "Trainingstage"}`, "Gesamtvolumen");
+        days.forEach(entry => {
+            let volumes = entry.sessions.map(s => s.volume);
+            let best = entry.sessions.reduce((a, b) => (b.volume > a.volume ? b : a));
+            card.body.appendChild(statRow(
+                DAY_LABELS[entry.type] || entry.type,
+                statSubtitle(entry.sessions.length, volumes),
+                volumes,
+                `<b>${kg(best.volume)}</b>Best ${escapeHtml(best.date)}`
+            ));
+        });
+        container.appendChild(card.item);
+    }
+
+    if (stats.length) {
+        let card = foldCard("progress-exercises", `${stats.length} ${stats.length === 1 ? "Übung" : "Übungen"}`, "Bestwerte & Volumen");
+        stats.forEach(entry => {
+            let volumes = entry.sessions.map(s => s.volume);
+            card.body.appendChild(statRow(
+                entry.name,
+                statSubtitle(entry.sessions.length, volumes),
+                volumes,
+                `<b>${entry.best.weight} kg × ${entry.best.reps}</b>Best ${escapeHtml(entry.best.date)}`
+            ));
+        });
+        container.appendChild(card.item);
+    }
+}
+
+/* Alles, was sich aus der Historie ableitet, neu aufbauen */
+async function refreshDerived() {
+    await refreshExerciseNames();
+    await displayHistory();
+    await displayProgress();
+}
+
+/* ---------- Export / Import ---------- */
+async function exportBackup() {
+    let payload = {
+        app: BACKUP_FORMAT,
+        version: 1,
+        exported: new Date().toISOString(),
+        workouts: await getWorkouts(),
+        settings: settings,
+        cycleDay: await getCycleDay(),
+        cycleVersion: CYCLE_VERSION
+    };
+
+    let blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    let url = URL.createObjectURL(blob);
+    let link = document.createElement("a");
+    link.href = url;
+    link.download = `gym-logbuch-${todayISO()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    showToast(`Backup mit ${payload.workouts.length} Trainings exportiert`);
+}
+
+async function importBackup(input) {
+    let file = input.files && input.files[0];
+    input.value = ""; // damit dieselbe Datei erneut gewählt werden kann
+    if (!file) return;
+
+    let payload;
+    try {
+        payload = JSON.parse(await file.text());
+    } catch (e) {
+        alert("Die Datei ist kein gültiges JSON.");
+        return;
+    }
+
+    if (!payload || payload.app !== BACKUP_FORMAT || !Array.isArray(payload.workouts)) {
+        alert("Das sieht nicht nach einem Backup dieses Logbuchs aus.");
+        return;
+    }
+
+    let current = await getWorkouts();
+    if (!confirm(`${payload.workouts.length} Trainings aus dem Backup übernehmen?\n` +
+                 `Die aktuellen Daten (${current.length} Trainings) werden dabei ersetzt.`)) return;
+
+    await setWorkouts(payload.workouts);
+    if (payload.settings) await storageSet("settings", JSON.stringify(payload.settings));
+    if (Number.isInteger(payload.cycleDay)) {
+        await storageSet("cycleDay", JSON.stringify(clamp(payload.cycleDay, 0, CYCLE.length - 1)));
+        await storageSet("cycleVersion", CYCLE_VERSION);
+    }
+
+    openFolds.clear();
+    await reloadAll();
+    showToast(`${payload.workouts.length} Trainings importiert`);
+}
+
+/* ---------- Pausentimer ---------- */
+let restTimer = { endsAt: 0, handle: null };
+
+function beep() {
+    try {
+        let Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        let ctx = beep.ctx || (beep.ctx = new Ctx());
+        if (ctx.state === "suspended") ctx.resume();
+        [0, 0.2, 0.4].forEach(offset => {
+            let osc = ctx.createOscillator();
+            let gain = ctx.createGain();
+            osc.frequency.value = 880;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            let t = ctx.currentTime + offset;
+            gain.gain.setValueAtTime(0.0001, t);
+            gain.gain.exponentialRampToValueAtTime(0.22, t + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+            osc.start(t);
+            osc.stop(t + 0.18);
+        });
+    } catch (e) {
+        // Ton nicht möglich (Autoplay-Sperre o.ä.) – Vibration reicht dann
+    }
+}
+
+function formatSeconds(total) {
+    let s = Math.max(0, Math.ceil(total));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function renderTimer() {
+    let remaining = (restTimer.endsAt - Date.now()) / 1000;
+    document.getElementById("timerTime").textContent = formatSeconds(remaining);
+
+    if (remaining <= 0) {
+        clearInterval(restTimer.handle);
+        restTimer.handle = null;
+        let el = document.getElementById("timer");
+        el.classList.add("done");
+        beep();
+        if (navigator.vibrate) navigator.vibrate([180, 90, 180]);
+        setTimeout(() => {
+            el.classList.remove("running", "done");
+        }, 4000);
+    }
+}
+
+function startTimer(seconds) {
+    // Der Klick zählt als Nutzergeste – hier darf der AudioContext entstehen,
+    // damit der Ton am Ende nicht von der Autoplay-Sperre geschluckt wird.
+    beep.ctx = beep.ctx || (window.AudioContext || window.webkitAudioContext
+        ? new (window.AudioContext || window.webkitAudioContext)() : null);
+
+    restTimer.endsAt = Date.now() + seconds * 1000;
+    clearInterval(restTimer.handle);
+    // aus der Uhrzeit rechnen statt runterzuzählen – bleibt korrekt, auch wenn
+    // der Browser den Tab im Hintergrund ausbremst
+    restTimer.handle = setInterval(renderTimer, 250);
+
+    let el = document.getElementById("timer");
+    el.classList.remove("done");
+    el.classList.add("running");
+    renderTimer();
+}
+
+function addTimerTime(seconds) {
+    if (!restTimer.handle) return;
+    restTimer.endsAt += seconds * 1000;
+    renderTimer();
+}
+
+function stopTimer() {
+    clearInterval(restTimer.handle);
+    restTimer.handle = null;
+    document.getElementById("timer").classList.remove("running", "done");
+}
+
+/* ---------- Zyklus-Steuerung ---------- */
+async function getCycleDay() {
+    let stored = await storageGet("cycleDay", null);
+    if (stored === null) {
+        await storageSet("cycleDay", JSON.stringify(0)); // Start = Torso A
+        await storageSet("cycleVersion", CYCLE_VERSION);
+        return 0;
+    }
+
+    let day = JSON.parse(stored);
+    if (!Number.isInteger(day)) day = 0;
+
+    /* Migration: früher waren 0-3 die vier Trainings und 4 der einzige
+       Restday. Jetzt liegen die Pausen im Zyklus an Position 2 und 5. */
+    if (await storageGet("cycleVersion", "1") !== CYCLE_VERSION) {
+        day = { 0: 0, 1: 1, 2: 3, 3: 4, 4: 2 }[day] ?? 0;
+        await storageSet("cycleDay", JSON.stringify(day));
+        await storageSet("cycleVersion", CYCLE_VERSION);
+    }
+
+    return clamp(day, 0, CYCLE.length - 1);
+}
+
+/* Die Pausentage tauchen hier bewusst nicht auf – sie kommen nur durch die
+   Rotation, anwählen kann man ausschließlich Trainingstage. */
+function buildDayPicker() {
+    let picker = document.getElementById("dayPicker");
+    picker.innerHTML = "";
+    CYCLE.forEach((type, day) => {
+        if (!type) return;
+        let btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "day-btn";
+        btn.dataset.day = day;
+        btn.textContent = DAY_LABELS[type];
+        btn.onclick = () => setDay(day);
+        picker.appendChild(btn);
+    });
+}
+
+async function showTodayWorkout() {
+    let cycleDay = await getCycleDay();
+    // Im Bearbeiten-Modus zeigt die Seite den Trainingstag des Eintrags,
+    // ohne dass die Rotation dadurch verstellt wird.
+    let type = editing ? editing.type : CYCLE[cycleDay];
+    let activeDay = editing ? CYCLE.indexOf(editing.type) : cycleDay;
+
+    document.querySelectorAll(".day-btn").forEach(btn => {
+        btn.classList.toggle("active", Number(btn.dataset.day) === activeDay);
+    });
+
+    TRAINING_TYPES.forEach(t => {
+        document.getElementById(t + "Section").style.display = "none";
+    });
+
+    let restMessage = document.getElementById("restMessage");
+    let actions = document.getElementById("actionsBar");
+    let timer = document.getElementById("timer");
+    let editBar = document.getElementById("editBar");
+    let saveBtn = document.getElementById("saveBtn");
+
+    editBar.style.display = editing ? "flex" : "none";
+    if (editing) document.getElementById("editDateLabel").textContent = editing.date;
+    saveBtn.textContent = editing ? "Änderungen fertig" : "Training abschließen";
+
+    if (!type) {
+        document.getElementById("restNextLabel").textContent =
+            DAY_LABELS[CYCLE[nextTrainingDay(cycleDay)]];
+        restMessage.style.display = "block";
+        actions.style.display = "none";
+        timer.classList.remove("show");
+        return;
+    }
+
+    restMessage.style.display = "none";
+    actions.style.display = "flex";
+    timer.classList.add("show");
+
+    document.getElementById(type + "Section").style.display = "block";
+
+    await loadWorkoutInto(type);
+    await updateHints(type);
+    setSaveStatus("");
+}
+
+async function nextDay() {
+    let cycleDay = await getCycleDay();
+    await storageSet("cycleDay", JSON.stringify((cycleDay + 1) % CYCLE.length));
+}
+
+/* „Training abschließen“: offene Autosaves wegschreiben, Zyklus weiterschalten.
+   Das eigentliche Speichern ist zu diesem Zeitpunkt längst passiert. */
+async function finishWorkout() {
+    let type = editing ? editing.type : CYCLE[await getCycleDay()];
+    if (!type) return;
+
+    await persistWorkout(type);
+    await refreshDerived();
+
+    // Beim Nachbearbeiten darf die Rotation nicht weiterspringen – das
+    // Training liegt ja in der Vergangenheit.
+    if (editing) {
+        showToast("Änderungen gespeichert ✓");
+        await backToToday();
+        return;
+    }
+
+    showToast(`${DAY_LABELS[type]} abgeschlossen ✓`);
+    await nextDay();
+    await showTodayWorkout();
+}
+
+/* Aus der Historie heraus ein gespeichertes Training zum Ändern öffnen */
+async function editWorkout(workout) {
+    if (!CYCLE.includes(workout.type)) return;
+
+    await flushAutosave();
+    editing = { date: workout.date, type: workout.type };
+    workoutDate = displayToIso(workout.date);
+    await showTodayWorkout();
+
+    document.getElementById(workout.type + "Section")
+        .scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function backToToday() {
+    await flushAutosave();
+    editing = null;
+    workoutDate = todayISO();
+    await showTodayWorkout();
+}
+
+/* Pausentag abhaken – ohne das säße man auf dem Pausentag fest, weil es dort
+   nichts zu speichern gibt. */
+async function finishRestDay() {
+    let cycleDay = await getCycleDay();
+    if (CYCLE[cycleDay]) return;
+    await setDay(nextTrainingDay(cycleDay));
+}
+
+/* Manuelle Wahl setzt den Zyklus auf diesen Tag – ab da rotiert er normal weiter */
+async function setDay(day) {
+    await flushAutosave();
+    editing = null;              // Tageswahl verlässt den Bearbeiten-Modus
+    workoutDate = todayISO();
+    await storageSet("cycleDay", JSON.stringify(day));
+    await showTodayWorkout();
+}
+
+async function reloadAll() {
+    document.getElementById("trainingSections").innerHTML = "";
+    settings = {};
+    await loadSettings();
+    buildSections();
+    await refreshDerived();
+    await showTodayWorkout();
+}
+
+/* ---------- Start ---------- */
+async function init() {
+    document.getElementById("todayLabel").textContent = isoToDisplay(todayISO());
+
+    // letzte Rettung, falls der Tab zugeht, bevor der Autosave-Timer feuert
+    window.addEventListener("beforeunload", () => {
+        if (autosavePending) persistWorkout(autosavePending);
+    });
+
+    await loadSettings();
+    buildDayPicker();
+    buildSections();
+    await refreshDerived();
+    await showTodayWorkout();
+}
+
+init();
+</script>
+
+</body>
+</html>
